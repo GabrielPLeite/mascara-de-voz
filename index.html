@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16131d">
+<title>Máscara de Voz</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: uma coluna de mesa de jogo; barra do microfone fixa no topo, grade de vozes, painel de ajuste da voz ativa. */
+:root{
+  --bg:#16131d; --panel:#211c2b; --panel-2:#2b2538; --line:#3a3249;
+  --fg:#efe9f6; --muted:#a69cb6; --accent:#e6a93c; --accent-ink:#1d1405;
+  --live:#5ccf8a; --danger:#e0645a;
+  --display:"Cinzel", "Trajan Pro", Georgia, serif;
+  --body:"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 var(--body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-bottom:calc(32px + env(safe-area-inset-bottom,0px));-webkit-tap-highlight-color:transparent}
+.wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+header.top{position:sticky;top:0;z-index:5;background:var(--bg);padding-top:calc(12px + env(safe-area-inset-top,0px));padding-bottom:12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.brand{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+h1{font:700 22px/1.1 var(--display);letter-spacing:.04em;margin:0}
+.now{font-size:13px;color:var(--muted);text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.now b{color:var(--accent);font-weight:600}
+.microw{display:flex;gap:10px;align-items:center}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mic{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;min-height:54px;border-radius:14px;background:var(--accent);color:var(--accent-ink);font-weight:600;font-size:16px}
+.mic.on{background:var(--panel-2);color:var(--fg);box-shadow:inset 0 0 0 2px var(--live)}
+.mic .dot{width:12px;height:12px;border-radius:50%;background:currentColor;opacity:.7}
+.mic.on .dot{background:var(--live);opacity:1;animation:pulse 1.4s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.mute{min-height:54px;padding:0 16px;border-radius:14px;background:var(--panel);border:1px solid var(--line);font-weight:600}
+.mute[aria-pressed="true"]{background:var(--danger);border-color:var(--danger);color:#fff}
+.meter{height:6px;border-radius:3px;background:var(--panel);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--live);transition:width .06s linear}
+.msg{font-size:13px;color:var(--muted);margin:0}
+.msg.err{color:var(--danger)}
+h2{font:600 15px/1.2 var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0}
+.voices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.voice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:14px;border-radius:12px;background:var(--panel);border:1px solid var(--line);min-height:76px;min-width:0}
+.voice .n{font:600 16px/1.2 var(--display);letter-spacing:.02em;overflow-wrap:anywhere}
+.voice .d{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.voice[aria-pressed="true"]{border-color:var(--accent);background:var(--panel-2);box-shadow:0 0 0 1px var(--accent)}
+.voice[aria-pressed="true"] .n{color:var(--accent)}
+.voice.add{align-items:center;justify-content:center;border-style:dashed;color:var(--muted)}
+section{display:flex;flex-direction:column;gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:16px}
+label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted)}
+.lab{display:flex;justify-content:space-between;gap:8px}
+.lab output{color:var(--fg);font-variant-numeric:tabular-nums;font-weight:600}
+input[type=text],select,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;width:100%}
+textarea{min-height:90px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
+input[type=range]{width:100%;accent-color:var(--accent);height:28px}
+.scale{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+.btn{padding:10px 14px;border-radius:10px;background:var(--panel-2);border:1px solid var(--line);font-size:14px}
+.btn.danger{color:var(--danger)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+.check{flex-direction:row;align-items:center;gap:10px;color:var(--fg);font-size:14px}
+.check input{width:20px;height:20px;accent-color:var(--accent)}
+.hint{font-size:12px;color:var(--muted);margin:0}
+details summary{cursor:pointer;color:var(--muted);font-size:14px}
+details[open] summary{margin-bottom:12px}
+@media (prefers-reduced-motion:reduce){.mic.on .dot{animation:none}.meter i{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>Máscara de Voz</h1>
+      <div class="now">Voz: <b id="nowName">Voz natural</b></div>
+    </div>
+    <div class="microw">
+      <button id="micBtn" class="mic" type="button"><span class="dot"></span><span id="micLabel">Ligar microfone</span></button>
+      <button id="muteBtn" class="mute" type="button" aria-pressed="false" disabled>Silenciar</button>
+    </div>
+    <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+    <p id="msg" class="msg">Conecte a caixa Bluetooth no celular antes de ligar o microfone.</p>
+  </header>
+
+  <section aria-labelledby="hVoices">
+    <h2 id="hVoices">Vozes</h2>
+    <div id="voices" class="voices"></div>
+  </section>
+
+  <section aria-labelledby="hEdit">
+    <h2 id="hEdit">Ajustar esta voz</h2>
+    <div class="card" id="editor">
+      <label for="fName">Nome
+        <input id="fName" type="text" maxlength="40" autocomplete="off">
+      </label>
+      <label for="fPitch"><span class="lab">Tom <output id="oPitch"></output></span>
+        <input id="fPitch" type="range" min="-12" max="12" step="1">
+        <span class="scale"><span>mais grave</span><span>mais agudo</span></span>
+      </label>
+      <label for="fBody"><span class="lab">Corpo <output id="oBody"></output></span>
+        <input id="fBody" type="range" min="-5" max="5" step="1">
+        <span class="scale"><span>criatura miúda</span><span>criatura enorme</span></span>
+      </label>
+      <label for="fRasp"><span class="lab">Rouquidão <output id="oRasp"></output></span>
+        <input id="fRasp" type="range" min="0" max="10" step="1">
+        <span class="scale"><span>limpa</span><span>rosnado</span></span>
+      </label>
+      <label for="fRoom"><span class="lab">Ambiente <output id="oRoom"></output></span>
+        <input id="fRoom" type="range" min="0" max="10" step="1">
+        <span class="scale"><span>seco</span><span>caverna enorme</span></span>
+      </label>
+      <label for="fSpecial">Efeito especial
+        <select id="fSpecial">
+          <option value="none">Nenhum</option>
+          <option value="tremor">Tremido (voz idosa)</option>
+          <option value="whisper">Sussurro misturado</option>
+          <option value="layers">Vozes em camadas (telepatia)</option>
+          <option value="metal">Eco metálico</option>
+          <option value="bass">Reforço de graves</option>
+        </select>
+      </label>
+      <div class="row">
+        <button class="btn" id="dupBtn" type="button">Duplicar</button>
+        <button class="btn danger" id="delBtn" type="button">Excluir</button>
+      </div>
+      <p id="delConfirm" class="hint" hidden>Excluir esta voz? <button class="btn danger" id="delYes" type="button">Sim, excluir</button> <button class="btn" id="delNo" type="button">Cancelar</button></p>
+      <p class="hint">As mudanças são salvas sozinhas neste celular.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="hSet">
+    <h2 id="hSet">Ajustes gerais</h2>
+    <div class="card">
+      <label for="fVol"><span class="lab">Volume <output id="oVol"></output></span>
+        <input id="fVol" type="range" min="0" max="200" step="5">
+      </label>
+      <label class="check" for="fAnti"><input id="fAnti" type="checkbox"> Modo anti-microfonia</label>
+      <p class="hint">Ligue se a caixa começar a apitar. Ele limpa o som do microfone, mas pode deixar a voz um pouco mais abafada. Usar um fone com microfone ou afastar a caixa do celular também resolve.</p>
+      <details>
+        <summary>Backup das vozes</summary>
+        <div class="card" style="padding:0;border:0;gap:10px">
+          <p class="hint">Copie o texto abaixo e guarde (num bloco de notas, por exemplo). Para restaurar, cole o texto e toque em Restaurar.</p>
+          <textarea id="fBackup" aria-label="Texto de backup das vozes"></textarea>
+          <div class="row">
+            <button class="btn" id="copyBtn" type="button">Copiar backup</button>
+            <button class="btn" id="restoreBtn" type="button">Restaurar do texto</button>
+            <button class="btn danger" id="resetBtn" type="button">Voltar às vozes originais</button>
+          </div>
+          <p id="backupMsg" class="hint"></p>
+        </div>
+      </details>
+    </div>
+  </section>
+</div>
+
+<script id="worklet" type="text/plain">
+class PitchShifter extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [{name:'ratio',defaultValue:1,minValue:0.2,maxValue:5,automationRate:'a-rate'}]; }
+  constructor(){ super(); this.size=Math.round(sampleRate*0.045); this.n=8192; this.mask=this.n-1; this.buf=new Float32Array(this.n); this.w=0; this.ph=0; }
+  read(d){ let p=this.w-d; while(p<0)p+=this.n; const i=Math.floor(p), f=p-i; const a=this.buf[i&this.mask], b=this.buf[(i+1)&this.mask]; return a+(b-a)*f; }
+  process(inputs,outputs,params){
+    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const r=params.ratio; const L=out[0].length;
+    const S=this.size;
+    for(let i=0;i<L;i++){
+      const x=inp?inp[i]:0;
+      this.buf[this.w]=x;
+      const ratio=r.length>1?r[i]:r[0];
+      this.ph+=(1-ratio)/S; this.ph-=Math.floor(this.ph);
+      const p2=(this.ph+0.5)%1;
+      const s1=this.read(this.ph*S), s2=this.read(p2*S);
+      const g1=Math.sin(Math.PI*this.ph), g2=Math.sin(Math.PI*p2);
+      const y=s1*g1*g1+s2*g2*g2;
+      for(let c=0;c<out.length;c++) out[c][i]=y;
+      this.w=(this.w+1)&this.mask;
+    }
+    return true;
+  }
+}
+registerProcessor('pitch-shifter',PitchShifter);
+class Whisper extends AudioWorkletProcessor {
+  constructor(){ super(); this.env=0; this.att=1-Math.exp(-1/(sampleRate*0.005)); this.rel=1-Math.exp(-1/(sampleRate*0.08)); }
+  process(inputs,outputs){
+    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const L=out[0].length;
+    for(let i=0;i<L;i++){
+      const a=inp?Math.abs(inp[i]):0;
+      this.env+=(a-this.env)*(a>this.env?this.att:this.rel);
+      const y=(Math.random()*2-1)*this.env*2.5;
+      for(let c=0;c<out.length;c++) out[c][i]=y;
+    }
+    return true;
+  }
+}
+registerProcessor('whisper',Whisper);
+</script>
+
+<script>
+(function(){
+'use strict';
+const KEY='mascara-voz-v1';
+const SPECIAL_LABEL={none:'',tremor:'tremido',whisper:'sussurro',layers:'camadas',metal:'metálico',bass:'graves'};
+const DEFAULTS=[
+  {id:'natural',name:'Voz natural',pitch:0,body:0,rasp:0,room:0,special:'none',locked:true},
+  {id:'velha',name:'Velha',pitch:4,body:-3,rasp:3,room:2,special:'tremor'},
+  {id:'drow',name:'Drow',pitch:1,body:-1,rasp:0,room:5,special:'whisper'},
+  {id:'goblin',name:'Goblin',pitch:6,body:-3,rasp:4,room:2,special:'none'},
+  {id:'hobgoblin',name:'Hobgoblin',pitch:-2,body:2,rasp:4,room:2,special:'none'},
+  {id:'devorador',name:'Devorador de mentes',pitch:-3,body:0,rasp:1,room:8,special:'layers'},
+  {id:'minotauro',name:'Minotauro',pitch:-7,body:4,rasp:7,room:5,special:'bass'},
+  {id:'duergar',name:'Duergar',pitch:-4,body:1,rasp:5,room:4,special:'metal'}
+];
+const $=id=>document.getElementById(id);
+
+// ---------- Estado salvo ----------
+function clone(o){return JSON.parse(JSON.stringify(o));}
+let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false};
+try{const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&Array.isArray(s.voices)&&s.voices.length) state=Object.assign(state,s);}catch(e){}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
+function cur(){return state.voices.find(v=>v.id===state.active)||state.voices[0];}
+function sign(n){return n>0?'+'+n:String(n);}
+function summary(v){
+  if(v.locked) return 'sem efeito';
+  const s=['tom '+sign(v.pitch)];
+  if(SPECIAL_LABEL[v.special]) s.push(SPECIAL_LABEL[v.special]);
+  return s.join(' · ');
+}
+
+// ---------- Interface ----------
+const voicesEl=$('voices');
+function renderVoices(){
+  voicesEl.textContent='';
+  state.voices.forEach(v=>{
+    const b=document.createElement('button');
+    b.type='button'; b.className='voice'; b.setAttribute('aria-pressed',String(v.id===state.active));
+    const n=document.createElement('span'); n.className='n'; n.textContent=v.name||'Sem nome';
+    const d=document.createElement('span'); d.className='d'; d.textContent=summary(v);
+    b.append(n,d);
+    b.addEventListener('click',()=>{state.active=v.id; save(); renderAll(); applyVoice();});
+    voicesEl.appendChild(b);
+  });
+  const add=document.createElement('button');
+  add.type='button'; add.className='voice add'; add.textContent='+ Nova voz';
+  add.addEventListener('click',()=>{
+    const v={id:'v'+Date.now(),name:'Nova voz',pitch:0,body:0,rasp:0,room:0,special:'none'};
+    state.voices.push(v); state.active=v.id; save(); renderAll(); applyVoice(); $('fName').focus(); $('fName').select();
+  });
+  voicesEl.appendChild(add);
+  $('nowName').textContent=cur().name||'Sem nome';
+}
+function renderEditor(){
+  const v=cur();
+  $('fName').value=v.name; $('fPitch').value=v.pitch; $('fBody').value=v.body; $('fRasp').value=v.rasp; $('fRoom').value=v.room; $('fSpecial').value=v.special;
+  $('oPitch').textContent=sign(v.pitch); $('oBody').textContent=sign(v.body); $('oRasp').textContent=v.rasp; $('oRoom').textContent=v.room;
+  ['fName','fPitch','fBody','fRasp','fRoom','fSpecial'].forEach(id=>$(id).disabled=!!v.locked);
+  $('delBtn').disabled=!!v.locked;
+  $('delConfirm').hidden=true;
+}
+function renderAll(){renderVoices(); renderEditor();}
+
+function bindRange(id,key,out){
+  $(id).addEventListener('input',e=>{
+    const v=cur(); if(v.locked) return;
+    v[key]=Number(e.target.value); $(out).textContent=key==='pitch'||key==='body'?sign(v[key]):v[key];
+    save(); renderVoices(); applyVoice();
+  });
+}
+bindRange('fPitch','pitch','oPitch'); bindRange('fBody','body','oBody'); bindRange('fRasp','rasp','oRasp'); bindRange('fRoom','room','oRoom');
+$('fSpecial').addEventListener('change',e=>{const v=cur(); if(v.locked)return; v.special=e.target.value; save(); renderVoices(); applyVoice();});
+$('fName').addEventListener('input',e=>{const v=cur(); if(v.locked)return; v.name=e.target.value; save(); renderVoices();});
+$('dupBtn').addEventListener('click',()=>{
+  const v=clone(cur()); delete v.locked; v.id='v'+Date.now(); v.name=(cur().name||'Voz')+' (cópia)';
+  const i=state.voices.findIndex(x=>x.id===state.active); state.voices.splice(i+1,0,v); state.active=v.id; save(); renderAll(); applyVoice();
+});
+$('delBtn').addEventListener('click',()=>{ if(!cur().locked) $('delConfirm').hidden=false; });
+$('delNo').addEventListener('click',()=>{$('delConfirm').hidden=true;});
+$('delYes').addEventListener('click',()=>{
+  const i=state.voices.findIndex(x=>x.id===state.active); if(i<0||state.voices[i].locked) return;
+  state.voices.splice(i,1); state.active=(state.voices[i-1]||state.voices[0]).id; save(); renderAll(); applyVoice();
+});
+$('fVol').value=state.volume; $('oVol').textContent=state.volume+'%';
+$('fVol').addEventListener('input',e=>{state.volume=Number(e.target.value); $('oVol').textContent=state.volume+'%'; save(); if(eng) eng.master.gain.setTargetAtTime(muted?0:state.volume/100,eng.ctx.currentTime,0.02);});
+$('fAnti').checked=!!state.anti;
+$('fAnti').addEventListener('change',e=>{state.anti=e.target.checked; save(); if(eng) restartMic();});
+
+// Backup
+function fillBackup(){ $('fBackup').value=JSON.stringify({voices:state.voices.filter(v=>!v.locked)}); }
+$('hSet').parentElement.querySelector('details').addEventListener('toggle',fillBackup);
+$('copyBtn').addEventListener('click',()=>{
+  fillBackup(); const t=$('fBackup');
+  const done=()=>{$('backupMsg').textContent='Backup copiado.';};
+  try{ navigator.clipboard.writeText(t.value).then(done,()=>{t.select(); $('backupMsg').textContent='Texto selecionado. Toque e segure para copiar.';}); }
+  catch(e){ t.select(); $('backupMsg').textContent='Texto selecionado. Toque e segure para copiar.'; }
+});
+$('restoreBtn').addEventListener('click',()=>{
+  try{
+    const d=JSON.parse($('fBackup').value);
+    if(!d||!Array.isArray(d.voices)) throw 0;
+    const ok=d.voices.filter(v=>v&&typeof v.name==='string').map((v,i)=>({id:String(v.id||('r'+Date.now()+i)),name:v.name.slice(0,40),pitch:clamp(+v.pitch,-12,12),body:clamp(+v.body,-5,5),rasp:clamp(+v.rasp,0,10),room:clamp(+v.room,0,10),special:SPECIAL_LABEL[v.special]!==undefined?v.special:'none'}));
+    state.voices=[clone(DEFAULTS[0])].concat(ok); state.active='natural'; save(); renderAll(); applyVoice();
+    $('backupMsg').textContent='Restaurado: '+ok.length+' vozes.';
+  }catch(e){ $('backupMsg').textContent='Esse texto não é um backup válido. Cole o texto completo copiado antes.'; }
+});
+$('resetBtn').addEventListener('click',()=>{
+  if($('resetBtn').dataset.armed!=='1'){ $('resetBtn').dataset.armed='1'; $('resetBtn').textContent='Toque de novo para confirmar'; setTimeout(()=>{$('resetBtn').dataset.armed=''; $('resetBtn').textContent='Voltar às vozes originais';},4000); return; }
+  state.voices=clone(DEFAULTS); state.active='natural'; save(); renderAll(); applyVoice(); fillBackup();
+  $('resetBtn').dataset.armed=''; $('resetBtn').textContent='Voltar às vozes originais'; $('backupMsg').textContent='Vozes originais restauradas.';
+});
+function clamp(n,a,b){return isFinite(n)?Math.max(a,Math.min(b,Math.round(n))):0;}
+
+// ---------- Motor de áudio ----------
+let eng=null, stream=null, muted=false, wakeLock=null;
+function setMsg(t,err){const m=$('msg'); m.textContent=t; m.className='msg'+(err?' err':'');}
+
+function makeIR(ctx,seconds){
+  const len=Math.max(1,Math.floor(ctx.sampleRate*seconds)); const ir=ctx.createBuffer(2,len,ctx.sampleRate);
+  for(let c=0;c<2;c++){const d=ir.getChannelData(c); for(let i=0;i<len;i++){const t=i/len; d[i]=(Math.random()*2-1)*Math.pow(1-t,3);}}
+  return ir;
+}
+function distCurve(k){
+  const n=1024,c=new Float32Array(n);
+  for(let i=0;i<n;i++){const x=i*2/n-1; c[i]=(1+k)*x/(1+k*Math.abs(x));}
+  return c;
+}
+
+async function buildEngine(){
+  const AC=window.AudioContext||window.webkitAudioContext;
+  const ctx=new AC({latencyHint:'interactive'});
+  if(!ctx.audioWorklet) throw new Error('noworklet');
+  const code=$('worklet').textContent;
+  const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
+  await ctx.audioWorklet.addModule(url);
+  const G=v=>{const g=ctx.createGain(); g.gain.value=v; return g;};
+  const F=(type,f,q,gain)=>{const b=ctx.createBiquadFilter(); b.type=type; b.frequency.value=f; if(q!=null)b.Q.value=q; if(gain!=null)b.gain.value=gain; return b;};
+  const e={ctx};
+  e.input=G(1);
+  e.hp=F('highpass',80,0.7);
+  e.shift=new AudioWorkletNode(ctx,'pitch-shifter',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]});
+  e.shiftHi=new AudioWorkletNode(ctx,'pitch-shifter',{outputChannelCount:[1]});
+  e.shiftLo=new AudioWorkletNode(ctx,'pitch-shifter',{outputChannelCount:[1]});
+  e.layerGain=G(0);
+  e.whisper=new AudioWorkletNode(ctx,'whisper',{outputChannelCount:[1]});
+  e.whisperBP=F('bandpass',3500,0.6); e.whisperGain=G(0);
+  // vibrato
+  e.lfo=ctx.createOscillator(); e.lfo.frequency.value=5.5; e.lfoDepth=G(0); e.lfo.connect(e.lfoDepth); e.lfoDepth.connect(e.shift.parameters.get('ratio')); e.lfo.start();
+  e.lfoSlow=ctx.createOscillator(); e.lfoSlow.frequency.value=0.35; e.lfoSlowDepth=G(0); e.lfoSlow.connect(e.lfoSlowDepth); e.lfoSlowDepth.connect(e.shiftHi.parameters.get('ratio')); e.lfoSlowDepth.connect(e.shiftLo.parameters.get('ratio')); e.lfoSlow.start();
+  // corpo
+  e.voice=G(1);
+  e.bodyLow=F('lowshelf',260,null,0); e.bodyMid=F('peaking',550,1,0); e.bodyHigh=F('peaking',2600,0.9,0);
+  e.bodyHP=F('highpass',70,0.7); e.bodyLP=F('lowpass',14000,0.7);
+  e.bass=F('lowshelf',140,null,0);
+  // rouquidão
+  e.raspBP=F('bandpass',1400,0.7); e.raspWS=ctx.createWaveShaper(); e.raspWS.oversample='2x'; e.raspLP=F('lowpass',5000,0.7); e.raspGain=G(0);
+  // metal
+  e.metalDelay=ctx.createDelay(0.1); e.metalDelay.delayTime.value=0.011; e.metalFb=G(0.62); e.metalWet=G(0);
+  // ambiente
+  e.verb=ctx.createConvolver(); e.verbWet=G(0);
+  // saída
+  e.sum=G(1);
+  e.comp=ctx.createDynamicsCompressor(); e.comp.threshold.value=-20; e.comp.ratio.value=4; e.comp.attack.value=0.004; e.comp.release.value=0.15;
+  e.master=G(muted?0:state.volume/100);
+  e.analyser=ctx.createAnalyser(); e.analyser.fftSize=512;
+
+  e.input.connect(e.hp);
+  e.hp.connect(e.shift); e.hp.connect(e.shiftHi); e.hp.connect(e.shiftLo);
+  e.shift.connect(e.voice);
+  e.shiftHi.connect(e.layerGain); e.shiftLo.connect(e.layerGain); e.layerGain.connect(e.voice);
+  e.hp.connect(e.whisper); e.whisper.connect(e.whisperBP); e.whisperBP.connect(e.whisperGain); e.whisperGain.connect(e.voice);
+  e.voice.connect(e.bodyLow); e.bodyLow.connect(e.bodyMid); e.bodyMid.connect(e.bodyHigh); e.bodyHigh.connect(e.bodyHP); e.bodyHP.connect(e.bodyLP); e.bodyLP.connect(e.bass);
+  e.bass.connect(e.sum);
+  e.bass.connect(e.raspBP); e.raspBP.connect(e.raspWS); e.raspWS.connect(e.raspLP); e.raspLP.connect(e.raspGain); e.raspGain.connect(e.sum);
+  e.bass.connect(e.metalDelay); e.metalDelay.connect(e.metalFb); e.metalFb.connect(e.metalDelay); e.metalDelay.connect(e.metalWet); e.metalWet.connect(e.sum);
+  e.sum.connect(e.comp);
+  e.sum.connect(e.verb); e.verb.connect(e.verbWet); e.verbWet.connect(e.comp);
+  e.comp.connect(e.master); e.master.connect(ctx.destination); e.master.connect(e.analyser);
+  e.lastRoom=-1;
+  return e;
+}
+
+let roomTimer=null;
+function applyVoice(){
+  if(!eng) return;
+  const v=cur(), e=eng, t=e.ctx.currentTime, T=(p,val)=>p.setTargetAtTime(val,t,0.03);
+  const ratio=Math.pow(2,v.pitch/12);
+  T(e.shift.parameters.get('ratio'),ratio);
+  const layers=v.special==='layers';
+  T(e.shiftHi.parameters.get('ratio'),ratio*2); T(e.shiftLo.parameters.get('ratio'),ratio*0.5);
+  T(e.layerGain.gain,layers?0.45:0); T(e.lfoSlowDepth.gain,layers?ratio*0.012:0);
+  T(e.lfoDepth.gain,v.special==='tremor'?ratio*0.035:0);
+  T(e.whisperGain.gain,v.special==='whisper'?0.9:0);
+  // corpo: positivo = criatura maior
+  const b=v.body;
+  T(e.bodyLow.gain,b*1.6); T(e.bodyMid.gain,b*0.8); T(e.bodyHigh.gain,-b*1.4);
+  T(e.bodyHP.frequency,b<0?80+(-b)*55:60);
+  T(e.bodyLP.frequency,b>0?12000-b*1500:14000);
+  T(e.bass.gain,v.special==='bass'?9:0);
+  // rouquidão
+  e.raspWS.curve=distCurve(8+v.rasp*6);
+  T(e.raspGain.gain,v.rasp/10*0.55);
+  T(e.metalWet.gain,v.special==='metal'?0.5:0);
+  // ambiente (a reverberação é recalculada com pequena espera para não travar o arraste)
+  T(e.verbWet.gain,v.room/10*0.7);
+  clearTimeout(roomTimer);
+  roomTimer=setTimeout(()=>{ if(!eng) return; const r=cur().room; if(r!==eng.lastRoom&&r>0){ eng.verb.buffer=makeIR(eng.ctx,0.25+r*0.32); eng.lastRoom=r; } },120);
+}
+
+async function getMic(){
+  const anti=!!state.anti;
+  return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:anti,noiseSuppression:anti,autoGainControl:false,channelCount:1,latency:0}});
+}
+async function restartMic(){
+  if(!eng) return;
+  try{
+    const s=await getMic();
+    if(eng.src) eng.src.disconnect();
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    stream=s; eng.src=eng.ctx.createMediaStreamSource(stream); eng.src.connect(eng.input);
+  }catch(e){ setMsg('Não consegui reiniciar o microfone. Desligue e ligue de novo.',true); }
+}
+
+async function start(){
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    setMsg('O microfone só funciona quando o app é aberto pelo link https. Abra pelo link que o Claude te mandou.',true); return;
+  }
+  setMsg('Pedindo acesso ao microfone…');
+  try{
+    stream=await getMic();
+  }catch(e){
+    setMsg('Sem acesso ao microfone. Toque no cadeado ao lado do endereço, permita o microfone e tente de novo.',true); return;
+  }
+  try{
+    eng=await buildEngine();
+    eng.src=eng.ctx.createMediaStreamSource(stream); eng.src.connect(eng.input);
+    if(eng.ctx.state!=='running') await eng.ctx.resume();
+  }catch(e){
+    stream.getTracks().forEach(t=>t.stop()); stream=null; eng=null;
+    setMsg('Este navegador não consegue processar a voz. Use o Google Chrome atualizado.',true); return;
+  }
+  applyVoice();
+  $('micBtn').classList.add('on'); $('micLabel').textContent='Microfone ligado · tocar para desligar';
+  $('muteBtn').disabled=false;
+  const lat=Math.round(((eng.ctx.baseLatency||0)+(eng.ctx.outputLatency||0))*1000);
+  setMsg('Pode falar. Toque numa voz para trocar.'+(lat?' Atraso do celular: cerca de '+lat+' ms, fora o da caixa Bluetooth.':''));
+  try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
+  meterLoop();
+}
+async function stop(){
+  if(stream) stream.getTracks().forEach(t=>t.stop()); stream=null;
+  if(eng){ try{await eng.ctx.close();}catch(e){} } eng=null;
+  try{ if(wakeLock){await wakeLock.release(); wakeLock=null;} }catch(e){}
+  $('micBtn').classList.remove('on'); $('micLabel').textContent='Ligar microfone';
+  $('muteBtn').disabled=true; muted=false; $('muteBtn').setAttribute('aria-pressed','false'); $('muteBtn').textContent='Silenciar';
+  $('meter').style.width='0';
+  setMsg('Microfone desligado.');
+}
+$('micBtn').addEventListener('click',()=>{ eng?stop():start(); });
+$('muteBtn').addEventListener('click',()=>{
+  muted=!muted; $('muteBtn').setAttribute('aria-pressed',String(muted)); $('muteBtn').textContent=muted?'Silenciado':'Silenciar';
+  if(eng) eng.master.gain.setTargetAtTime(muted?0:state.volume/100,eng.ctx.currentTime,0.02);
+});
+document.addEventListener('visibilitychange',async()=>{
+  if(document.visibilityState==='visible'&&eng){
+    if(eng.ctx.state!=='running'){ try{await eng.ctx.resume();}catch(e){} }
+    try{ if('wakeLock' in navigator&&!wakeLock) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
+  }
+});
+function meterLoop(){
+  if(!eng) return;
+  const a=eng.analyser, d=new Float32Array(a.fftSize); a.getFloatTimeDomainData(d);
+  let s=0; for(let i=0;i<d.length;i++) s+=d[i]*d[i];
+  const rms=Math.sqrt(s/d.length); $('meter').style.width=Math.min(100,rms*400)+'%';
+  requestAnimationFrame(meterLoop);
+}
+
+renderAll();
+window.__mascara={state:()=>state,engine:()=>eng};
+})();
+</script>
+</body>
+</html>
