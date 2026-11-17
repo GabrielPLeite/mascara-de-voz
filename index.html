@@ -142,6 +142,10 @@ details[open] summary{margin-bottom:12px}
       <label for="fVol"><span class="lab">Volume <output id="oVol"></output></span>
         <input id="fVol" type="range" min="0" max="200" step="5">
       </label>
+      <label for="fMic">Microfone
+        <select id="fMic"><option value="">Padrão do celular</option></select>
+      </label>
+      <p class="hint">Com cabo na caixa, o celular pode tentar usar um microfone do cabo que não existe, e só sai chiado. Escolha aqui o microfone do próprio celular. A lista aparece depois de ligar o microfone.</p>
       <label for="fSens"><span class="lab">Sensibilidade do microfone <output id="oSens"></output></span>
         <input id="fSens" type="range" min="0" max="10" step="1">
         <span class="scale"><span>só voz alta e perto</span><span>capta tudo</span></span>
@@ -249,7 +253,7 @@ const $=id=>document.getElementById(id);
 
 // ---------- Estado salvo ----------
 function clone(o){return JSON.parse(JSON.stringify(o));}
-let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false,sens:5,lowLat:true};
+let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false,sens:5,lowLat:true,mic:''};
 try{const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&Array.isArray(s.voices)&&s.voices.length) state=Object.assign(state,s);}catch(e){}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
 function cur(){return state.voices.find(v=>v.id===state.active)||state.voices[0];}
@@ -324,6 +328,33 @@ $('fLowLat').checked=!!state.lowLat;
 $('fLowLat').addEventListener('change',e=>{state.lowLat=e.target.checked; save(); if(eng){ const ms=winMs(); [eng.shift,eng.shiftHi,eng.shiftLo].forEach(n=>n.port.postMessage({ms})); }});
 function winMs(){return state.lowLat?25:45;}
 $('fAnti').checked=!!state.anti;
+function micName(d,i){
+  const l=(d.label||'').toLowerCase();
+  if(/headset|fone|wired|usb|cabo|bluetooth|hands/.test(l)) return (d.label||'Microfone '+(i+1))+' (fone/cabo)';
+  if(/bottom|built|speaker|phone|internal|interno|default|padr/.test(l)) return (d.label||'Microfone '+(i+1))+' (celular)';
+  return d.label||('Microfone '+(i+1));
+}
+async function listMics(){
+  try{
+    const all=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput'&&d.deviceId&&d.deviceId!=='default'&&d.deviceId!=='communications');
+    const sel=$('fMic'); sel.textContent='';
+    const o0=document.createElement('option'); o0.value=''; o0.textContent='Padrão do celular'; sel.appendChild(o0);
+    all.forEach((d,i)=>{const o=document.createElement('option'); o.value=d.deviceId; o.dataset.label=d.label||''; o.textContent=micName(d,i); sel.appendChild(o);});
+    sel.value=all.some(d=>d.deviceId===state.mic)?state.mic:'';
+  }catch(e){}
+}
+$('fMic').addEventListener('change',e=>{const o=e.target.selectedOptions[0]; state.mic=e.target.value; state.micLabel=state.mic&&o?o.dataset.label||'':''; save(); if(eng) restartMic();});
+// O celular pode trocar o código do microfone; reencontra pelo nome.
+async function rematchMic(){
+  if(!state.micLabel) return;
+  try{
+    const all=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='audioinput');
+    if(all.some(d=>d.deviceId===state.mic)) return;
+    const m=all.find(d=>d.label===state.micLabel&&d.deviceId!=='default');
+    if(m){ state.mic=m.deviceId; save(); await restartMic(); listMics(); }
+  }catch(e){}
+}
+if(navigator.mediaDevices&&navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange',listMics);
 $('fAnti').addEventListener('change',e=>{state.anti=e.target.checked; save(); if(eng) restartMic();});
 
 // Backup
@@ -451,7 +482,9 @@ function applyVoice(){
 
 async function getMic(){
   const anti=!!state.anti;
-  return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:anti,noiseSuppression:anti,autoGainControl:false,channelCount:1,latency:0}});
+  const c={echoCancellation:anti,noiseSuppression:anti,autoGainControl:false,channelCount:1,latency:0};
+  if(state.mic){ try{ return await navigator.mediaDevices.getUserMedia({audio:Object.assign({deviceId:{exact:state.mic}},c)}); }catch(e){} }
+  return navigator.mediaDevices.getUserMedia({audio:c});
 }
 async function restartMic(){
   if(!eng) return;
@@ -481,11 +514,11 @@ async function start(){
     stream.getTracks().forEach(t=>t.stop()); stream=null; eng=null;
     setMsg('Este navegador não consegue processar a voz. Use o Google Chrome atualizado.',true); return;
   }
-  applyVoice();
+  applyVoice(); await rematchMic(); listMics();
   $('micBtn').classList.add('on'); $('micLabel').textContent='Desligar microfone';
   $('muteBtn').disabled=false;
   const lat=Math.round(((eng.ctx.baseLatency||0)+(eng.ctx.outputLatency||0))*1000);
-  setMsg('Pode falar. Toque numa voz para trocar.'+(lat?' Atraso do celular: cerca de '+lat+' ms, fora o da caixa Bluetooth.':''));
+  setMsg('Pode falar. Toque numa voz para trocar.'+(lat?' Atraso do celular: cerca de '+lat+' ms, fora o da caixa de som.':''));
   try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
   meterLoop();
 }
