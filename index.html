@@ -38,8 +38,11 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @keyframes pulse{50%{opacity:.35}}
 .mute{min-height:54px;padding:0 16px;border-radius:14px;background:var(--panel);border:1px solid var(--line);font-weight:600}
 .mute[aria-pressed="true"]{background:var(--danger);border-color:var(--danger);color:#fff}
-.meter{height:6px;border-radius:3px;background:var(--panel);overflow:hidden}
-.meter i{display:block;height:100%;width:0;background:var(--live);transition:width .06s linear}
+.meter{position:relative;height:8px;border-radius:4px;background:var(--panel);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--muted);transition:width .06s linear}
+.meter i.open{background:var(--live)}
+.meter b{position:absolute;top:0;bottom:0;width:2px;background:var(--accent)}
+.legend{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:-4px}
 .msg{font-size:13px;color:var(--muted);margin:0}
 .msg.err{color:var(--danger)}
 h2{font:600 15px/1.2 var(--display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0}
@@ -82,7 +85,8 @@ details[open] summary{margin-bottom:12px}
       <button id="micBtn" class="mic" type="button"><span class="dot"></span><span id="micLabel">Ligar microfone</span></button>
       <button id="muteBtn" class="mute" type="button" aria-pressed="false" disabled>Silenciar</button>
     </div>
-    <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+    <div class="meter" aria-hidden="true"><i id="meter"></i><b id="thrMark"></b></div>
+    <div class="legend"><span>barra = som que chega no microfone</span><span>risco = corte de ruído</span></div>
     <p id="msg" class="msg">Conecte a caixa Bluetooth no celular antes de ligar o microfone.</p>
   </header>
 
@@ -138,6 +142,13 @@ details[open] summary{margin-bottom:12px}
       <label for="fVol"><span class="lab">Volume <output id="oVol"></output></span>
         <input id="fVol" type="range" min="0" max="200" step="5">
       </label>
+      <label for="fSens"><span class="lab">Sensibilidade do microfone <output id="oSens"></output></span>
+        <input id="fSens" type="range" min="0" max="10" step="1">
+        <span class="scale"><span>só voz alta e perto</span><span>capta tudo</span></span>
+      </label>
+      <p class="hint">Sons abaixo do risco laranja na barra do topo (ventilador, conversa ao fundo) são cortados. Fique em silêncio e baixe a sensibilidade até a barra parar antes do risco; depois fale e veja ela passar.</p>
+      <label class="check" for="fLowLat"><input id="fLowLat" type="checkbox"> Baixa latência</label>
+      <p class="hint">Diminui o atraso do efeito. Em vozes muito graves o som pode ficar um pouco mais áspero.</p>
       <label class="check" for="fAnti"><input id="fAnti" type="checkbox"> Modo anti-microfonia</label>
       <p class="hint">Ligue se a caixa começar a apitar. Ele limpa o som do microfone, mas pode deixar a voz um pouco mais abafada. Usar um fone com microfone ou afastar a caixa do celular também resolve.</p>
       <details>
@@ -160,7 +171,8 @@ details[open] summary{margin-bottom:12px}
 <script id="worklet" type="text/plain">
 class PitchShifter extends AudioWorkletProcessor {
   static get parameterDescriptors(){ return [{name:'ratio',defaultValue:1,minValue:0.2,maxValue:5,automationRate:'a-rate'}]; }
-  constructor(){ super(); this.size=Math.round(sampleRate*0.045); this.n=8192; this.mask=this.n-1; this.buf=new Float32Array(this.n); this.w=0; this.ph=0; }
+  constructor(opts){ super(); const ms=(opts&&opts.processorOptions&&opts.processorOptions.ms)||45; this.size=Math.round(sampleRate*ms/1000); this.n=8192; this.mask=this.n-1; this.buf=new Float32Array(this.n); this.w=0; this.ph=0;
+    this.port.onmessage=e=>{ if(e.data&&e.data.ms) this.size=Math.round(sampleRate*e.data.ms/1000); }; }
   read(d){ let p=this.w-d; while(p<0)p+=this.n; const i=Math.floor(p), f=p-i; const a=this.buf[i&this.mask], b=this.buf[(i+1)&this.mask]; return a+(b-a)*f; }
   process(inputs,outputs,params){
     const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const r=params.ratio; const L=out[0].length;
@@ -195,6 +207,27 @@ class Whisper extends AudioWorkletProcessor {
   }
 }
 registerProcessor('whisper',Whisper);
+class Gate extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [{name:'threshold',defaultValue:-42,minValue:-90,maxValue:0,automationRate:'k-rate'}]; }
+  constructor(){ super(); this.env=0; this.g=0; this.hold=0;
+    this.envA=1-Math.exp(-1/(sampleRate*0.002)); this.envR=1-Math.exp(-1/(sampleRate*0.03));
+    this.open=1-Math.exp(-1/(sampleRate*0.002)); this.close=1-Math.exp(-1/(sampleRate*0.09)); this.holdN=Math.round(sampleRate*0.15); }
+  process(inputs,outputs,params){
+    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const L=out[0].length;
+    const thr=Math.pow(10,params.threshold[0]/20);
+    for(let i=0;i<L;i++){
+      const x=inp?inp[i]:0, a=Math.abs(x);
+      this.env+=(a-this.env)*(a>this.env?this.envA:this.envR);
+      if(this.env>thr){ this.hold=this.holdN; } else if(this.hold>0){ this.hold--; }
+      const target=this.hold>0?1:0;
+      this.g+=(target-this.g)*(target>this.g?this.open:this.close);
+      const y=x*this.g;
+      for(let c=0;c<out.length;c++) out[c][i]=y;
+    }
+    return true;
+  }
+}
+registerProcessor('noise-gate',Gate);
 </script>
 
 <script>
@@ -216,7 +249,7 @@ const $=id=>document.getElementById(id);
 
 // ---------- Estado salvo ----------
 function clone(o){return JSON.parse(JSON.stringify(o));}
-let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false};
+let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false,sens:5,lowLat:true};
 try{const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&Array.isArray(s.voices)&&s.voices.length) state=Object.assign(state,s);}catch(e){}
 function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
 function cur(){return state.voices.find(v=>v.id===state.active)||state.voices[0];}
@@ -282,6 +315,14 @@ $('delYes').addEventListener('click',()=>{
 });
 $('fVol').value=state.volume; $('oVol').textContent=state.volume+'%';
 $('fVol').addEventListener('input',e=>{state.volume=Number(e.target.value); $('oVol').textContent=state.volume+'%'; save(); if(eng) eng.master.gain.setTargetAtTime(muted?0:state.volume/100,eng.ctx.currentTime,0.02);});
+function thrDb(){return -25-state.sens*3.5;}
+function dbPos(db){return Math.max(0,Math.min(100,(db+75)/75*100));}
+function showThr(){ $('oSens').textContent=state.sens; $('thrMark').style.left=dbPos(thrDb())+'%'; }
+$('fSens').value=state.sens; showThr();
+$('fSens').addEventListener('input',e=>{state.sens=Number(e.target.value); showThr(); save(); if(eng) eng.gate.parameters.get('threshold').setValueAtTime(thrDb(),eng.ctx.currentTime);});
+$('fLowLat').checked=!!state.lowLat;
+$('fLowLat').addEventListener('change',e=>{state.lowLat=e.target.checked; save(); if(eng){ const ms=winMs(); [eng.shift,eng.shiftHi,eng.shiftLo].forEach(n=>n.port.postMessage({ms})); }});
+function winMs(){return state.lowLat?25:45;}
 $('fAnti').checked=!!state.anti;
 $('fAnti').addEventListener('change',e=>{state.anti=e.target.checked; save(); if(eng) restartMic();});
 
@@ -327,7 +368,7 @@ function distCurve(k){
 
 async function buildEngine(){
   const AC=window.AudioContext||window.webkitAudioContext;
-  const ctx=new AC({latencyHint:'interactive'});
+  let ctx; try{ ctx=new AC({latencyHint:0}); }catch(err){ ctx=new AC({latencyHint:'interactive'}); }
   if(!ctx.audioWorklet) throw new Error('noworklet');
   const code=$('worklet').textContent;
   const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
@@ -336,10 +377,13 @@ async function buildEngine(){
   const F=(type,f,q,gain)=>{const b=ctx.createBiquadFilter(); b.type=type; b.frequency.value=f; if(q!=null)b.Q.value=q; if(gain!=null)b.gain.value=gain; return b;};
   const e={ctx};
   e.input=G(1);
-  e.hp=F('highpass',80,0.7);
-  e.shift=new AudioWorkletNode(ctx,'pitch-shifter',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1]});
-  e.shiftHi=new AudioWorkletNode(ctx,'pitch-shifter',{outputChannelCount:[1]});
-  e.shiftLo=new AudioWorkletNode(ctx,'pitch-shifter',{outputChannelCount:[1]});
+  e.inAnalyser=ctx.createAnalyser(); e.inAnalyser.fftSize=512;
+  e.gate=new AudioWorkletNode(ctx,'noise-gate',{outputChannelCount:[1]}); e.gate.parameters.get('threshold').value=thrDb();
+  e.hp=F('highpass',110,0.7);
+  const po={processorOptions:{ms:winMs()},outputChannelCount:[1]};
+  e.shift=new AudioWorkletNode(ctx,'pitch-shifter',po);
+  e.shiftHi=new AudioWorkletNode(ctx,'pitch-shifter',po);
+  e.shiftLo=new AudioWorkletNode(ctx,'pitch-shifter',po);
   e.layerGain=G(0);
   e.whisper=new AudioWorkletNode(ctx,'whisper',{outputChannelCount:[1]});
   e.whisperBP=F('bandpass',3500,0.6); e.whisperGain=G(0);
@@ -361,9 +405,8 @@ async function buildEngine(){
   e.sum=G(1);
   e.comp=ctx.createDynamicsCompressor(); e.comp.threshold.value=-20; e.comp.ratio.value=4; e.comp.attack.value=0.004; e.comp.release.value=0.15;
   e.master=G(muted?0:state.volume/100);
-  e.analyser=ctx.createAnalyser(); e.analyser.fftSize=512;
 
-  e.input.connect(e.hp);
+  e.input.connect(e.inAnalyser); e.input.connect(e.gate); e.gate.connect(e.hp);
   e.hp.connect(e.shift); e.hp.connect(e.shiftHi); e.hp.connect(e.shiftLo);
   e.shift.connect(e.voice);
   e.shiftHi.connect(e.layerGain); e.shiftLo.connect(e.layerGain); e.layerGain.connect(e.voice);
@@ -374,7 +417,7 @@ async function buildEngine(){
   e.bass.connect(e.metalDelay); e.metalDelay.connect(e.metalFb); e.metalFb.connect(e.metalDelay); e.metalDelay.connect(e.metalWet); e.metalWet.connect(e.sum);
   e.sum.connect(e.comp);
   e.sum.connect(e.verb); e.verb.connect(e.verbWet); e.verbWet.connect(e.comp);
-  e.comp.connect(e.master); e.master.connect(ctx.destination); e.master.connect(e.analyser);
+  e.comp.connect(e.master); e.master.connect(ctx.destination);
   e.lastRoom=-1;
   return e;
 }
@@ -439,7 +482,7 @@ async function start(){
     setMsg('Este navegador não consegue processar a voz. Use o Google Chrome atualizado.',true); return;
   }
   applyVoice();
-  $('micBtn').classList.add('on'); $('micLabel').textContent='Microfone ligado · tocar para desligar';
+  $('micBtn').classList.add('on'); $('micLabel').textContent='Desligar microfone';
   $('muteBtn').disabled=false;
   const lat=Math.round(((eng.ctx.baseLatency||0)+(eng.ctx.outputLatency||0))*1000);
   setMsg('Pode falar. Toque numa voz para trocar.'+(lat?' Atraso do celular: cerca de '+lat+' ms, fora o da caixa Bluetooth.':''));
@@ -468,9 +511,10 @@ document.addEventListener('visibilitychange',async()=>{
 });
 function meterLoop(){
   if(!eng) return;
-  const a=eng.analyser, d=new Float32Array(a.fftSize); a.getFloatTimeDomainData(d);
-  let s=0; for(let i=0;i<d.length;i++) s+=d[i]*d[i];
-  const rms=Math.sqrt(s/d.length); $('meter').style.width=Math.min(100,rms*400)+'%';
+  const a=eng.inAnalyser, d=new Float32Array(a.fftSize); a.getFloatTimeDomainData(d);
+  let pk=0; for(let i=0;i<d.length;i++){const v=Math.abs(d[i]); if(v>pk)pk=v;}
+  const db=20*Math.log10(pk+1e-9); const m=$('meter');
+  m.style.width=dbPos(db)+'%'; m.classList.toggle('open',db>thrDb());
   requestAnimationFrame(meterLoop);
 }
 
