@@ -215,7 +215,7 @@ class Gate extends AudioWorkletProcessor {
   static get parameterDescriptors(){ return [{name:'threshold',defaultValue:-42,minValue:-90,maxValue:0,automationRate:'k-rate'}]; }
   constructor(){ super(); this.env=0; this.g=0; this.hold=0;
     this.envA=1-Math.exp(-1/(sampleRate*0.002)); this.envR=1-Math.exp(-1/(sampleRate*0.03));
-    this.open=1-Math.exp(-1/(sampleRate*0.002)); this.close=1-Math.exp(-1/(sampleRate*0.09)); this.holdN=Math.round(sampleRate*0.15); }
+    this.open=1-Math.exp(-1/(sampleRate*0.002)); this.close=1-Math.exp(-1/(sampleRate*0.04)); this.holdN=Math.round(sampleRate*0.06); }
   process(inputs,outputs,params){
     const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const L=out[0].length;
     const thr=Math.pow(10,params.threshold[0]/20);
@@ -434,7 +434,7 @@ async function buildEngine(){
   e.verb=ctx.createConvolver(); e.verbWet=G(0);
   // saída
   e.sum=G(1);
-  e.comp=ctx.createDynamicsCompressor(); e.comp.threshold.value=-20; e.comp.ratio.value=4; e.comp.attack.value=0.004; e.comp.release.value=0.15;
+  e.comp=ctx.createDynamicsCompressor(); e.comp.threshold.value=-3; e.comp.knee.value=0; e.comp.ratio.value=20; e.comp.attack.value=0.002; e.comp.release.value=0.1;
   e.master=G(muted?0:state.volume/100);
 
   e.input.connect(e.inAnalyser); e.input.connect(e.gate); e.gate.connect(e.hp);
