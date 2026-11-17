@@ -151,6 +151,13 @@ details[open] summary{margin-bottom:12px}
         <span class="scale"><span>só voz alta e perto</span><span>capta tudo</span></span>
       </label>
       <p class="hint">Sons abaixo do risco laranja na barra do topo (ventilador, conversa ao fundo) são cortados. Fique em silêncio e baixe a sensibilidade até a barra parar antes do risco; depois fale e veja ela passar.</p>
+      <label for="fNR"><span class="lab">Redução de chiado <output id="oNR"></output></span>
+        <input id="fNR" type="range" min="0" max="10" step="1">
+        <span class="scale"><span>natural</span><span>bem limpo</span></span>
+      </label>
+      <p class="hint">Tira o chiado constante do microfone. Em valores muito altos a voz pode ficar "submersa".</p>
+      <label class="check" for="fWind"><input id="fWind" type="checkbox"> Modo vento</label>
+      <p class="hint">Para uso ao ar livre: corta os graves do vento, fecha mais o corte de ruído e reforça a redução de chiado. Proteja o microfone com uma espuma ou capa de pelo e fique de costas para o vento, que ajuda mais do que qualquer ajuste.</p>
       <label class="check" for="fLowLat"><input id="fLowLat" type="checkbox"> Baixa latência</label>
       <p class="hint">Diminui o atraso do efeito. Em vozes muito graves o som pode ficar um pouco mais áspero.</p>
       <label class="check" for="fAnti"><input id="fAnti" type="checkbox"> Modo anti-microfonia</label>
@@ -174,24 +181,47 @@ details[open] summary{margin-bottom:12px}
 
 <script id="worklet" type="text/plain">
 class PitchShifter extends AudioWorkletProcessor {
+  // Troca de tom no domínio do tempo: lê o áudio mais rápido/devagar e, quando a leitura
+  // se afasta demais, "pula" para um ponto de onda parecida (correlação) com uma emenda suave.
   static get parameterDescriptors(){ return [{name:'ratio',defaultValue:1,minValue:0.2,maxValue:5,automationRate:'a-rate'}]; }
-  constructor(opts){ super(); const ms=(opts&&opts.processorOptions&&opts.processorOptions.ms)||45; this.size=Math.round(sampleRate*ms/1000); this.n=8192; this.mask=this.n-1; this.buf=new Float32Array(this.n); this.w=0; this.ph=0;
-    this.port.onmessage=e=>{ if(e.data&&e.data.ms) this.size=Math.round(sampleRate*e.data.ms/1000); }; }
-  read(d){ let p=this.w-d; while(p<0)p+=this.n; const i=Math.floor(p), f=p-i; const a=this.buf[i&this.mask], b=this.buf[(i+1)&this.mask]; return a+(b-a)*f; }
+  constructor(opts){
+    super();
+    this.n=32768; this.mask=this.n-1; this.buf=new Float32Array(this.n); this.w=0;
+    this.fade=Math.round(sampleRate*0.004); this.M=Math.round(sampleRate*0.010);
+    this.setMs((opts&&opts.processorOptions&&opts.processorOptions.ms)||32);
+    this.rp=-(32+this.W/2); this.rp0=0; this.fp=0;
+    this.port.onmessage=e=>{ if(e.data&&e.data.ms) this.setMs(e.data.ms); };
+  }
+  setMs(ms){ this.W=Math.max(256,Math.round(sampleRate*ms/1000)); }
+  rd(p){ const i=Math.floor(p), f=p-i; const a=this.buf[i&this.mask], b=this.buf[(i+1)&this.mask]; return a+(b-a)*f; }
+  splice(dir){
+    const M=this.M, mask=this.mask, buf=this.buf, base=Math.floor(this.rp);
+    const sMin=Math.round(this.W*0.5), sMax=this.W; let best=-1e30, bs=sMax;
+    for(let s=sMin;s<=sMax;s+=2){
+      const off=dir>0?base-s:base+s; let c=0,e=1e-9;
+      for(let j=0;j<M;j+=2){ const x=buf[(base-M+j)&mask], y=buf[(off-M+j)&mask]; c+=x*y; e+=y*y; }
+      const sc=c/Math.sqrt(e); if(sc>best){best=sc;bs=s;}
+    }
+    this.rp0=this.rp; this.rp+= dir>0?-bs:bs; this.fp=1;
+  }
   process(inputs,outputs,params){
-    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const r=params.ratio; const L=out[0].length;
-    const S=this.size;
+    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const L=out[0].length; const R=params.ratio;
+    const buf=this.buf, mask=this.mask, fade=this.fade;
     for(let i=0;i<L;i++){
-      const x=inp?inp[i]:0;
-      this.buf[this.w]=x;
-      const ratio=r.length>1?r[i]:r[0];
-      this.ph+=(1-ratio)/S; this.ph-=Math.floor(this.ph);
-      const p2=(this.ph+0.5)%1;
-      const s1=this.read(this.ph*S), s2=this.read(p2*S);
-      const g1=Math.sin(Math.PI*this.ph), g2=Math.sin(Math.PI*p2);
-      const y=s1*g1*g1+s2*g2*g2;
+      buf[this.w&mask]=inp?inp[i]:0; this.w++;
+      const r=R.length>1?R[i]:R[0];
+      this.rp+=r; if(this.fp>0) this.rp0+=r;
+      if(this.fp===0){
+        const D=this.w-this.rp, lo=32+fade*Math.max(0,r-1), hi=lo+this.W;
+        if(D<lo) this.splice(1); else if(D>hi) this.splice(-1);
+      }
+      let y;
+      if(this.fp>0){
+        const g=0.5-0.5*Math.cos(Math.PI*this.fp/fade);
+        y=this.rd(this.rp0)*(1-g)+this.rd(this.rp)*g;
+        if(++this.fp>fade) this.fp=0;
+      } else y=this.rd(this.rp);
       for(let c=0;c<out.length;c++) out[c][i]=y;
-      this.w=(this.w+1)&this.mask;
     }
     return true;
   }
@@ -234,7 +264,7 @@ class Gate extends AudioWorkletProcessor {
 registerProcessor('noise-gate',Gate);
 // Muda o "tamanho da garganta" (formantes) sem mudar o tom: STFT + envelope por cepstro.
 class Formant extends AudioWorkletProcessor {
-  static get parameterDescriptors(){ return [{name:'alpha',defaultValue:1,minValue:0.5,maxValue:2,automationRate:'k-rate'}]; }
+  static get parameterDescriptors(){ return [{name:'alpha',defaultValue:1,minValue:0.5,maxValue:2,automationRate:'k-rate'},{name:'denoise',defaultValue:0,minValue:0,maxValue:10,automationRate:'k-rate'}]; }
   constructor(){
     super();
     const N=this.N=1024; this.hop=256; this.lat=N-this.hop; this.rover=this.lat; this.K=28;
@@ -242,6 +272,7 @@ class Formant extends AudioWorkletProcessor {
     this.win=new Float32Array(N); for(let i=0;i<N;i++) this.win[i]=0.5-0.5*Math.cos(2*Math.PI*i/N);
     this.re=new Float64Array(N); this.im=new Float64Array(N); this.cr=new Float64Array(N); this.ci=new Float64Array(N);
     this.lm=new Float64Array(N/2+1); this.env=new Float64Array(N/2+1);
+    this.ps=new Float64Array(N/2+1); this.nz=new Float64Array(N/2+1).fill(1e-4); this.gs=new Float64Array(N/2+1).fill(1); this.gr=new Float64Array(N/2+1); this.warm=0;
     this.rev=new Uint32Array(N); const bits=Math.log2(N); for(let i=0;i<N;i++){let r=0,x=i;for(let b=0;b<bits;b++){r=(r<<1)|(x&1);x>>=1;} this.rev[i]=r;}
     this.cs=new Float64Array(N/2); this.sn=new Float64Array(N/2); for(let i=0;i<N/2;i++){this.cs[i]=Math.cos(2*Math.PI*i/N); this.sn[i]=Math.sin(2*Math.PI*i/N);}
   }
@@ -259,10 +290,29 @@ class Formant extends AudioWorkletProcessor {
       }
     }
   }
-  frame(alpha){
+  denoise(amount){
+    const H=this.N/2, re=this.re, im=this.im, ps=this.ps, nz=this.nz, gs=this.gs, gr=this.gr;
+    const bias=3.0+amount*0.55, gmin=0.5-amount*0.043;
+    for(let k=0;k<=H;k++){
+      const p=re[k]*re[k]+im[k]*im[k];
+      ps[k]=this.warm<4?p:0.7*ps[k]+0.3*p;
+      nz[k]=this.warm<4?ps[k]:Math.min(ps[k],nz[k]*1.005);
+    }
+    if(this.warm<4) this.warm++;
+    for(let k=0;k<=H;k++){
+      let g=1-bias*nz[k]/(ps[k]+1e-12); if(g<gmin)g=gmin; gr[k]=g;
+    }
+    for(let k=0;k<=H;k++){
+      const g=(gr[Math.max(0,k-1)]+2*gr[k]+gr[Math.min(H,k+1)])*0.25;
+      gs[k]= g>gs[k] ? 0.25*gs[k]+0.75*g : 0.75*gs[k]+0.25*g;
+      re[k]*=gs[k]; im[k]*=gs[k];
+    }
+  }
+  frame(alpha,nr){
     const N=this.N, H=N/2, re=this.re, im=this.im, cr=this.cr, ci=this.ci, lm=this.lm, env=this.env, K=this.K;
     for(let i=0;i<N;i++){re[i]=this.inF[i]*this.win[i]; im[i]=0;}
     this.fft(re,im,false);
+    if(nr>0.05) this.denoise(nr);
     if(Math.abs(alpha-1)>0.01){
       for(let k=0;k<=H;k++){ lm[k]=Math.log(Math.hypot(re[k],im[k])+1e-9); }
       for(let k=0;k<N;k++){ cr[k]=k<=H?lm[k]:lm[N-k]; ci[k]=0; }
@@ -275,9 +325,9 @@ class Formant extends AudioWorkletProcessor {
         if(src>=H){ e2=env[H]; } else { const i0=Math.floor(src), f=src-i0; e2=env[i0]+(env[i0+1]-env[i0])*f; }
         let d=e2-env[k]; if(d>2.8)d=2.8; else if(d<-4)d=-4;
         const g=Math.exp(d); re[k]*=g; im[k]*=g;
-        if(k>0&&k<H){ re[N-k]=re[k]; im[N-k]=-im[k]; }
       }
     }
+    for(let k=1;k<H;k++){ re[N-k]=re[k]; im[N-k]=-im[k]; }
     this.fft(re,im,true);
     const sc=1/(N*1.5);
     for(let i=0;i<N;i++) this.acc[i]+=re[i]*this.win[i]*sc;
@@ -286,13 +336,13 @@ class Formant extends AudioWorkletProcessor {
     this.inF.copyWithin(0,this.hop,N);
   }
   process(inputs,outputs,params){
-    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const L=out[0].length; const alpha=params.alpha[0];
+    const inp=inputs[0]&&inputs[0][0]; const out=outputs[0]; const L=out[0].length; const alpha=params.alpha[0], nr=params.denoise[0];
     for(let i=0;i<L;i++){
       this.inF[this.rover]=inp?inp[i]:0;
       const y=this.outF[this.rover-this.lat];
       for(let c=0;c<out.length;c++) out[c][i]=y;
       this.rover++;
-      if(this.rover>=this.N){ this.rover=this.lat; this.frame(alpha); }
+      if(this.rover>=this.N){ this.rover=this.lat; this.frame(alpha,nr); }
     }
     return true;
   }
@@ -307,20 +357,20 @@ const KEY='mascara-voz-v1';
 const SPECIAL_LABEL={none:'',tremor:'tremido',whisper:'sussurro',layers:'camadas',metal:'metálico',bass:'graves'};
 const DEFAULTS=[
   {id:'natural',name:'Voz natural',pitch:0,body:0,rasp:0,room:0,special:'none',locked:true},
-  {id:'velha',name:'Velha',pitch:4,body:-4,rasp:3,room:2,special:'tremor'},
+  {id:'velha',name:'Velha',pitch:4,body:-4,rasp:1,room:2,special:'tremor'},
   {id:'drow',name:'Drow',pitch:1,body:-1,rasp:0,room:5,special:'whisper'},
-  {id:'goblin',name:'Goblin',pitch:6,body:-5,rasp:4,room:2,special:'none'},
-  {id:'hobgoblin',name:'Hobgoblin',pitch:-2,body:2,rasp:4,room:2,special:'none'},
-  {id:'devorador',name:'Devorador de mentes',pitch:-3,body:0,rasp:1,room:8,special:'layers'},
-  {id:'minotauro',name:'Minotauro',pitch:-7,body:5,rasp:7,room:5,special:'bass'},
-  {id:'duergar',name:'Duergar',pitch:-4,body:2,rasp:5,room:4,special:'metal'}
+  {id:'goblin',name:'Goblin',pitch:6,body:-5,rasp:2,room:2,special:'none'},
+  {id:'hobgoblin',name:'Hobgoblin',pitch:-2,body:2,rasp:2,room:2,special:'none'},
+  {id:'devorador',name:'Devorador de mentes',pitch:-3,body:0,rasp:0,room:8,special:'layers'},
+  {id:'minotauro',name:'Minotauro',pitch:-7,body:5,rasp:4,room:5,special:'bass'},
+  {id:'duergar',name:'Duergar',pitch:-4,body:2,rasp:3,room:4,special:'metal'}
 ];
 const $=id=>document.getElementById(id);
 
 // ---------- Estado salvo ----------
 function clone(o){return JSON.parse(JSON.stringify(o));}
-let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false,sens:5,lowLat:true,mic:''};
-const DEF_VER=2;
+let state={voices:clone(DEFAULTS),active:'natural',volume:100,anti:false,sens:5,lowLat:true,mic:'',nr:5,wind:false};
+const DEF_VER=3;
 try{const s=JSON.parse(localStorage.getItem(KEY)||'null'); if(s&&Array.isArray(s.voices)&&s.voices.length) state=Object.assign(state,s);}catch(e){}
 // Nova versão do motor: atualiza as vozes originais e mantém as vozes criadas pela pessoa.
 if((state.defVer||1)<DEF_VER){ state.voices=state.voices.map(v=>{const d=DEFAULTS.find(x=>x.id===v.id); return d?clone(d):v;}); state.defVer=DEF_VER; }
@@ -388,14 +438,24 @@ $('delYes').addEventListener('click',()=>{
 });
 $('fVol').value=state.volume; $('oVol').textContent=state.volume+'%';
 $('fVol').addEventListener('input',e=>{state.volume=Number(e.target.value); $('oVol').textContent=state.volume+'%'; save(); if(eng) eng.master.gain.setTargetAtTime(muted?0:state.volume/100,eng.ctx.currentTime,0.02);});
-function thrDb(){return -25-state.sens*3.5;}
+function thrDb(){return -25-state.sens*3.5+(state.wind?6:0);}
 function dbPos(db){return Math.max(0,Math.min(100,(db+75)/75*100));}
 function showThr(){ $('oSens').textContent=state.sens; $('thrMark').style.left=dbPos(thrDb())+'%'; }
 $('fSens').value=state.sens; showThr();
 $('fSens').addEventListener('input',e=>{state.sens=Number(e.target.value); showThr(); save(); if(eng) eng.gate.parameters.get('threshold').setValueAtTime(thrDb(),eng.ctx.currentTime);});
+$('fNR').value=state.nr; $('oNR').textContent=state.nr;
+$('fNR').addEventListener('input',e=>{state.nr=Number(e.target.value); $('oNR').textContent=state.nr; save(); applyNoise();});
+$('fWind').checked=!!state.wind;
+$('fWind').addEventListener('change',e=>{state.wind=e.target.checked; save(); showThr(); applyNoise();});
+function applyNoise(){
+  if(!eng) return; const t=eng.ctx.currentTime, w=!!state.wind;
+  eng.hp.frequency.setTargetAtTime(w?170:100,t,0.03); eng.hp2.frequency.setTargetAtTime(w?170:20,t,0.03);
+  eng.formant.parameters.get('denoise').setValueAtTime(Math.min(10,state.nr+(w?3:0)),t);
+  eng.gate.parameters.get('threshold').setValueAtTime(thrDb(),t);
+}
 $('fLowLat').checked=!!state.lowLat;
 $('fLowLat').addEventListener('change',e=>{state.lowLat=e.target.checked; save(); if(eng){ const ms=winMs(); [eng.shift,eng.shiftHi,eng.shiftLo].forEach(n=>n.port.postMessage({ms})); }});
-function winMs(){return state.lowLat?25:45;}
+function winMs(){return state.lowLat?16:32;}
 $('fAnti').checked=!!state.anti;
 function micName(d,i){
   const l=(d.label||'').toLowerCase();
@@ -460,9 +520,10 @@ function makeIR(ctx,seconds){
   for(let c=0;c<2;c++){const d=ir.getChannelData(c); for(let i=0;i<len;i++){const t=i/len; d[i]=(Math.random()*2-1)*Math.pow(1-t,3);}}
   return ir;
 }
-function distCurve(k){
+function distCurve(a){
+  // ganho 1 para sons fracos: só distorce o que é forte, sem aumentar o chiado
   const n=1024,c=new Float32Array(n);
-  for(let i=0;i<n;i++){const x=i*2/n-1; c[i]=(1+k)*x/(1+k*Math.abs(x));}
+  for(let i=0;i<n;i++){const x=i*2/n-1; c[i]=Math.tanh(a*x)/a;}
   return c;
 }
 
@@ -479,7 +540,7 @@ async function buildEngine(){
   e.input=G(1);
   e.inAnalyser=ctx.createAnalyser(); e.inAnalyser.fftSize=512;
   e.gate=new AudioWorkletNode(ctx,'noise-gate',{outputChannelCount:[1]}); e.gate.parameters.get('threshold').value=thrDb();
-  e.hp=F('highpass',110,0.7);
+  e.hp=F('highpass',100,0.707); e.hp2=F('highpass',20,0.707);
   const po={processorOptions:{ms:winMs()},outputChannelCount:[1]};
   e.shift=new AudioWorkletNode(ctx,'pitch-shifter',po);
   e.shiftHi=new AudioWorkletNode(ctx,'pitch-shifter',po);
@@ -507,11 +568,12 @@ async function buildEngine(){
   e.master=G(muted?0:state.volume/100);
 
   e.input.connect(e.inAnalyser); e.input.connect(e.gate); e.gate.connect(e.hp);
-  e.hp.connect(e.shift); e.hp.connect(e.shiftHi); e.hp.connect(e.shiftLo);
+  e.hp.connect(e.hp2);
+  e.hp2.connect(e.shift); e.hp2.connect(e.shiftHi); e.hp2.connect(e.shiftLo);
   e.formant=new AudioWorkletNode(ctx,'formant',{outputChannelCount:[1]});
   e.shift.connect(e.formant); e.formant.connect(e.voice);
   e.shiftHi.connect(e.layerGain); e.shiftLo.connect(e.layerGain); e.layerGain.connect(e.voice);
-  e.hp.connect(e.whisper); e.whisper.connect(e.whisperBP); e.whisperBP.connect(e.whisperGain); e.whisperGain.connect(e.voice);
+  e.hp2.connect(e.whisper); e.whisper.connect(e.whisperBP); e.whisperBP.connect(e.whisperGain); e.whisperGain.connect(e.voice);
   e.voice.connect(e.bodyLow); e.bodyLow.connect(e.bodyMid); e.bodyMid.connect(e.bodyHigh); e.bodyHigh.connect(e.bodyHP); e.bodyHP.connect(e.bodyLP); e.bodyLP.connect(e.bass);
   e.bass.connect(e.sum);
   e.bass.connect(e.raspBP); e.raspBP.connect(e.raspWS); e.raspWS.connect(e.raspLP); e.raspLP.connect(e.raspGain); e.raspGain.connect(e.sum);
@@ -531,9 +593,9 @@ function applyVoice(){
   T(e.shift.parameters.get('ratio'),ratio);
   const layers=v.special==='layers';
   T(e.shiftHi.parameters.get('ratio'),ratio*2); T(e.shiftLo.parameters.get('ratio'),ratio*0.5);
-  T(e.layerGain.gain,layers?0.45:0); T(e.lfoSlowDepth.gain,layers?ratio*0.012:0);
-  T(e.lfoDepth.gain,v.special==='tremor'?ratio*0.035:0);
-  T(e.whisperGain.gain,v.special==='whisper'?0.9:0);
+  T(e.layerGain.gain,layers?0.3:0); T(e.lfoSlowDepth.gain,layers?ratio*0.012:0);
+  T(e.lfoDepth.gain,v.special==='tremor'?ratio*0.02:0);
+  T(e.whisperGain.gain,v.special==='whisper'?0.3:0);
   // corpo: positivo = criatura maior
   const b=v.body;
   const fTarget=Math.pow(2,-b*0.07);            // garganta desejada (corpo +5 = formantes ~22% mais baixos)
@@ -544,8 +606,8 @@ function applyVoice(){
   T(e.bodyLP.frequency,b>0?12000-b*1500:14000);
   T(e.bass.gain,v.special==='bass'?9:0);
   // rouquidão
-  e.raspWS.curve=distCurve(8+v.rasp*6);
-  T(e.raspGain.gain,v.rasp/10*0.55);
+  e.raspWS.curve=distCurve(2+v.rasp*0.8);
+  T(e.raspGain.gain,v.rasp/10*0.5);
   T(e.metalWet.gain,v.special==='metal'?0.5:0);
   // ambiente (a reverberação é recalculada com pequena espera para não travar o arraste)
   T(e.verbWet.gain,v.room/10*0.7);
@@ -587,7 +649,7 @@ async function start(){
     stream.getTracks().forEach(t=>t.stop()); stream=null; eng=null;
     setMsg('Este navegador não consegue processar a voz. Use o Google Chrome atualizado.',true); return;
   }
-  applyVoice(); await rematchMic(); listMics();
+  applyVoice(); applyNoise(); await rematchMic(); listMics();
   $('micBtn').classList.add('on'); $('micLabel').textContent='Desligar microfone';
   $('muteBtn').disabled=false;
   const lat=Math.round(((eng.ctx.baseLatency||0)+(eng.ctx.outputLatency||0))*1000);
